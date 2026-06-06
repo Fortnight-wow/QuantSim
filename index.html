@@ -123,7 +123,15 @@
         alpha3Bot: false,
         customBotEnabled: false,
         customBotLanguage: 'JavaScript',
-        customBotCode: `// Example custom bot\n// Use market, portfolio and helpers\nif (market.rsi < 30) {\n  return { action: 'BUY_ALL' };\n}\nif (market.rsi > 70) {\n  return { action: 'SELL_ALL' };\n}\nreturn { action: 'HOLD' };`,
+        customBotCode: `// Example custom bot
+// Use market, portfolio and helpers
+if (market.rsi < 30) {
+  return { action: 'BUY_ALL' };
+}
+if (market.rsi > 70) {
+  return { action: 'SELL_ALL' };
+}
+return { action: 'HOLD' };`,
         customBotProfit: 0,
         botStats: {
           sma: { equity: [10000], profit: 0, sharpe: 0 },
@@ -145,7 +153,9 @@
         lastDrawnPrice: 100,
         netWorthTrail: [10000],
         drawdownPeak: 10000,
-        tickerNote: 'SMA Sharpe: 0.00 | Pattern Sharpe: 0.00 | Alpha3 Sharpe: 0.00 | Custom Sharpe: 0.00'
+        tickerNote: 'SMA Sharpe: 0.00 | Pattern Sharpe: 0.00 | Alpha3 Sharpe: 0.00 | Custom Sharpe: 0.00',
+        aiProvider: 'Gemini',
+        aiModel: 'gemini-2.5-flash-preview-09-2025'
       };
 
       const stateRefs = {
@@ -265,10 +275,19 @@
 
               <div class="card panel rounded-xl border border-zinc-800 p-3 bg-zinc-900/70">
                 <div class="text-sm font-semibold text-white mb-2">AI Agents</div>
-                <button id="aiAdviceBtn" class="btn w-full rounded-lg p-2 bg-purple-500/10 text-purple-300 border border-purple-500/20 font-semibold">AI Portfolio Review ✨</button>
-                <button id="newsBtn" class="btn w-full rounded-lg p-2 mt-2 bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">Inject AI News Event ✨</button>
-                <button id="analysisBtn" class="btn w-full rounded-lg p-2 mt-2 bg-sky-500/10 text-sky-300 border border-sky-500/20 font-semibold">AI Tech Analysis ✨</button>
-                <div id="aiOutput" class="mt-3 text-xs text-zinc-300 leading-relaxed"></div>
+                <button id="aiAdviceBtn" class="btn w-full p-2 rounded-xl text-sm font-bold border bg-purple-500/10 text-purple-400 border-purple-500/30 hover:bg-purple-500/20">
+                  AI Portfolio Review ✨
+                </button>
+                <div id="aiAdviceBox" class="hidden p-3 bg-purple-500/10 border border-purple-500/20 rounded-xl text-xs text-purple-200 italic leading-relaxed"></div>
+
+                <button id="newsBtn" class="btn w-full p-2 rounded-xl text-sm font-bold border bg-orange-500/10 text-orange-400 border-orange-500/30 hover:bg-orange-500/20">
+                  Inject AI News Event ✨
+                </button>
+
+                <button id="analysisBtn" class="btn w-full p-2 rounded-xl text-sm font-bold border bg-blue-500/10 text-blue-400 border-blue-500/30 hover:bg-blue-500/20">
+                  AI Tech Analysis ✨
+                </button>
+                <div id="analysisBox" class="hidden p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl text-xs text-blue-200 leading-relaxed"></div>
               </div>
             </section>
           </div>
@@ -808,7 +827,7 @@
         const map = [
           ['smaBtn', 'autoTrade', 'SMA Bot Active', 'Enable SMA Bot'],
           ['patternBtn', 'patternBot', 'Pattern Bot Active', 'Enable Pattern Bot'],
-          ['alphaBtn', 'alpha3Bot', 'Alpha 3 Bot Active', 'Enable Alpha 3 Bot'],
+          ['alphaBtn', 'alpha3Bot', 'Alpha3 Bot Active', 'Enable Alpha 3 Bot'],
           ['customBotToggle', 'customBotEnabled', 'On', 'Off'],
         ];
         for (const [id, key, onText, offText] of map) {
@@ -848,7 +867,14 @@
       el('botLang').addEventListener('change', (e) => state.customBotLanguage = e.target.value);
       el('customCode').addEventListener('input', (e) => state.customBotCode = e.target.value);
       el('resetCustom').addEventListener('click', () => {
-        state.customBotCode = `// Example custom bot\nif (market.rsi < 30) {\n  return { action: 'BUY_ALL' };\n}\nif (market.rsi > 70) {\n  return { action: 'SELL_ALL' };\n}\nreturn { action: 'HOLD' };`;
+        state.customBotCode = `// Example custom bot
+if (market.rsi < 30) {
+  return { action: 'BUY_ALL' };
+}
+if (market.rsi > 70) {
+  return { action: 'SELL_ALL' };
+}
+return { action: 'HOLD' };`;
         el('customCode').value = state.customBotCode;
       });
       el('runCustom').addEventListener('click', () => {
@@ -862,51 +888,234 @@
         state.isFetchingRegime = false;
         renderAll();
       });
-      el('aiAdviceBtn').addEventListener('click', () => {
-        state.aiAdvice = 'AI is currently unavailable in pure HTML mode. Use your own math.';
-        renderAll();
-      });
-      el('analysisBtn').addEventListener('click', () => {
-        const closes = state.history.map(h => h.close);
-        const price = closes[closes.length - 1];
-        const rs = rsi(closes).toFixed(2);
-        state.analyst = `Price ${fmt.format(price)}. RSI ${rs}. Trend filter and risk compression remain the primary signals.`;
-        renderAll();
-      });
-      el('newsBtn').addEventListener('click', () => {
-        state.news = { text: 'Breaking fictional macro shock hits the market.', impact: 'bear' };
-        state.regime = { name: 'AI News Shock', drift: -0.005, vol: 0.02 };
-        renderAll();
-      });
-      el('loadPolygon').addEventListener('click', async () => {
-        const key = el('polygonKey').value.trim();
-        const ticker = el('tickerInput').value.trim().toUpperCase();
-        state.polygonKey = key;
-        state.ticker = ticker || 'AAPL';
-        state.polygonError = 'Live Polygon fetch not wired in static HTML build.';
-        renderAll();
-      });
+      el('aiAdviceBtn').addEventListener('click', getAIAdvice);
+      el('newsBtn').addEventListener('click', generateMarketNews);
+      el('analysisBtn').addEventListener('click', getStrategyAnalysis);
+      if (els.aiProvider) els.aiProvider.addEventListener('change', () => { state.aiProvider = els.aiProvider.value; });
+      if (els.aiModel) els.aiModel.addEventListener('change', () => { state.aiModel = els.aiModel.value; });
 
-      el('customCode').value = state.customBotCode;
-      el('botLang').value = state.customBotLanguage;
-      setTradeButtons();
-      resizeCanvases();
-      renderAll();
+      async function callAI(prompt, isJson = false) {
+        const provider = (els.aiProvider?.value || state.aiProvider || "Gemini").trim();
+        const apiKey = (els.aiApiKey?.value || "").trim();
+        const model = (els.aiModel?.value || state.aiModel || "gemini-2.5-flash-preview-09-2025").trim();
 
-      let lastFrame = performance.now();
-      function loop(ts) {
-        const interval = 500 / state.speed;
-        if (state.isRunning && ts - lastFrame >= interval) {
-          lastFrame = ts;
-          priceStep();
-          computeBotSnapshots(state.history[state.history.length - 1].close);
+        if (provider !== "Mock" && !apiKey) return null;
+
+        const systemText = "You are a quantitative finance AI.";
+
+        async function tryFetch(url, options, parser) {
+          for (let i = 0; i < 3; i++) {
+            try {
+              const res = await fetch(url, options);
+              const data = await res.json();
+              const out = parser(data);
+              if (out) return out;
+            } catch (e) {
+              await new Promise(r => setTimeout(r, Math.pow(2, i) * 500));
+            }
+          }
+          return null;
         }
-        requestAnimationFrame(loop);
-      }
-      requestAnimationFrame(loop);
 
-      window.addEventListener('resize', resizeCanvases);
-    })();
+        if (provider === "Gemini") {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model || "gemini-2.5-flash-preview-09-2025")}:generateContent?key=${encodeURIComponent(apiKey)}`;
+          const payload = {
+            contents: [{ parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: systemText }] }
+          };
+          if (isJson) {
+            payload.generationConfig = {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: "OBJECT",
+                properties: {
+                  headline: { type: "STRING" },
+                  impact: { type: "STRING" }
+                }
+              }
+            };
+          }
+          return await tryFetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          }, (data) => data?.candidates?.[0]?.content?.parts?.[0]?.text || null);
+        }
+
+        if (provider === "OpenAI") {
+          const url = "https://api.openai.com/v1/chat/completions";
+          const payload = {
+            model: model || "gpt-4o-mini",
+            messages: [
+              { role: "system", content: systemText },
+              { role: "user", content: prompt }
+            ],
+            temperature: 0.7
+          };
+          if (isJson) payload.response_format = { type: "json_object" };
+          return await tryFetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${apiKey}`
+            },
+            body: JSON.stringify(payload)
+          }, (data) => data?.choices?.[0]?.message?.content || null);
+        }
+
+        if (provider === "Anthropic") {
+          const url = "https://api.anthropic.com/v1/messages";
+          const payload = {
+            model: model || "claude-3-5-sonnet-latest",
+            max_tokens: 512,
+            system: systemText,
+            messages: [{ role: "user", content: prompt }]
+          };
+          return await tryFetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": apiKey,
+              "anthropic-version": "2023-06-01"
+            },
+            body: JSON.stringify(payload)
+          }, (data) => data?.content?.[0]?.text || null);
+        }
+
+        return null;
+      }
+
+  function fallbackAdvice() {
+    const p = currentPrice();
+    const nw = netWorth();
+    return `Net worth is ${formatCurrency(nw)} and the price is ${formatCurrency(p)}. The simulator is alive, but your edge is still under investigation.`;
+  }
+
+  async function getAIAdvice() {
+    state.isFetchingAdvice = true; updateSidebar();
+    const p = currentPrice();
+    const nw = netWorth();
+    const prompt = `The user is playing a quantitative trading simulator. Net Worth: $${nw.toFixed(2)}, Cash: $${state.cash.toFixed(2)}, Holdings: ${state.holdings} shares. Current Market Price: $${p.toFixed(2)}. Market Regime: ${state.regime.name}. Give a fun, extremely brief 2-sentence piece of financial advice or roast their performance.`;
+    const res = await callAI(prompt, false);
+    const text = res || fallbackAdvice();
+    state.aiAdvice = text;
+    els.aiAdviceBox.textContent = text;
+    els.aiAdviceBox.classList.remove("hidden");
+    state.isFetchingAdvice = false; updateSidebar();
+  }
+
+  async function generateMarketNews() {
+    state.isFetchingNews = true; updateSidebar();
+    const prompt = `Generate a realistic, highly impactful breaking financial/macroeconomic news headline for a fictional market that would cause a sudden shock. Output a JSON object with 'headline' and 'impact' ('bull' or 'bear').`;
+    let headline = null, impact = null;
+    const res = await callAI(prompt, true);
+    if (res) {
+      try {
+        const parsed = JSON.parse(res);
+        headline = parsed.headline;
+        impact = parsed.impact;
+      } catch (e) {}
+    }
+    if (!headline) {
+      const bull = Math.random() > 0.5;
+      headline = bull ? "Central bank launches surprise liquidity flood after earnings shock." : "Global supply chain freeze triggers sudden risk-off panic across markets.";
+      impact = bull ? "bull" : "bear";
+    }
+    state.newsHeadline = { text: headline, impact };
+    setBanner(headline, impact);
+    const isBull = impact === "bull";
+    state.regime = { drift: isBull ? 0.005 : -0.005, vol: 0.020, name: `AI News Shock (${isBull ? 'Bull' : 'Bear'})` };
+    state.history[state.history.length - 1].close = Math.max(state.history[state.history.length - 1].close * (isBull ? 1.05 : 0.95), 0.01);
+    renderAll();
+    state.isFetchingNews = false; updateSidebar();
+  }
+
+  async function getStrategyAnalysis() {
+    state.isFetchingAnalyst = true; updateSidebar();
+    const closes = state.history.map(h => h.close);
+    const price = closes[closes.length - 1];
+    const rsi14 = rsi(closes, 14);
+    const prompt = `You are an expert quantitative trading AI assistant. The current asset price is $${price.toFixed(2)}. The RSI(14) is ${rsi14.toFixed(2)}. The current P/E ratio is ${state.peRatio.toFixed(2)}. Give a 2-sentence technical analysis on whether the algorithms should be buying or selling right now and why. Be direct and analytical.`;
+    const res = await callAI(prompt, false);
+    const text = res || `Technical view: price ${formatCurrency(price)}, RSI ${rsi14.toFixed(2)}, P/E ${state.peRatio.toFixed(2)}. The bots are not getting a free pass.`;
+    state.analystReport = text;
+    els.analysisBox.textContent = text;
+    els.analysisBox.classList.remove("hidden");
+    state.isFetchingAnalyst = false; updateSidebar();
+  }
+
+  function toggleRunning() {
+    state.isRunning = !state.isRunning;
+    els.toggleRun.textContent = state.isRunning ? 'HALT' : 'START';
+    els.toggleRun.className = `btn rounded-lg p-2 font-semibold border ${state.isRunning ? 'bg-red-500/15 text-red-300 border-red-500/20' : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20'}`;
+    if (state.isRunning) {
+      state.timer = setInterval(() => {
+        tick();
+      }, 500 / state.speed);
+    } else {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+  }
+
+  function changeSpeed() {
+    state.speed = state.speed === 1 ? 5 : state.speed === 5 ? 20 : 1;
+    els.toggleSpeed.textContent = state.speed + 'x';
+    if (state.isRunning) {
+      clearInterval(state.timer);
+      state.timer = setInterval(() => tick(), 500 / state.speed);
+    }
+  }
+
+  function updateSidebar() {
+    const price = currentPrice();
+    const nw = netWorth();
+    els.netWorth.textContent = formatCurrency(nw);
+    els.cash.textContent = formatCurrency(state.cash);
+    els.holdings.textContent = state.holdings;
+    els.peRatio.textContent = state.peRatio.toFixed(2);
+    els.sharpeRatio.textContent = sharpe(state.portfolio).toFixed(2);
+    els.maxDrawdown.textContent = ((nw - state.maxNetWorth) / state.maxNetWorth * 100).toFixed(2) + '%';
+    els.regimeName.textContent = state.regime.name;
+    els.priceLabel.firstChild.nodeValue = formatCurrency(price) + ' ';
+    els.trendIcon.textContent = state.displayPrice >= state.lastDrawnPrice ? '▲' : '▼';
+    els.trendIcon.className = state.displayPrice >= state.lastDrawnPrice ? 'text-green-400' : 'text-red-400';
+    els.tickerText.textContent = `SMA Sharpe: ${state.botArena.sma.sharpe.toFixed(2)} | Pattern Sharpe: ${state.botArena.pattern.sharpe.toFixed(2)} | Alpha3 Sharpe: ${state.botArena.alpha3.sharpe.toFixed(2)} | Custom Sharpe: ${state.botArena.custom.sharpe.toFixed(2)}`;
+    els.botArenaLegend.innerHTML = `
+      <div>SMA: ${fmt.format(state.botArena.sma.profit)}</div>
+      <div>Pattern: ${fmt.format(state.botArena.pattern.profit)}</div>
+      <div>Alpha3: ${fmt.format(state.botArena.alpha3.profit)}</div>
+      <div>Custom: ${fmt.format(state.botArena.custom.profit)}</div>
+    `;
+    setTradeButtons();
+    renderTrades();
+    drawAll();
+  }
+
+  function tick() {
+    const last = state.history[state.history.length - 1];
+    const p = last.close;
+    const change = p * (state.regime.drift + state.regime.vol * randn());
+    const newPrice = Math.max(0.01, p + change);
+    state.displayPrice = newPrice;
+    state.history[state.history.length - 1].close = newPrice;
+    state.history[state.history.length - 1].high = Math.max(state.history[state.history.length - 1].high, newPrice);
+    state.history[state.history.length - 1].low = Math.min(state.history[state.history.length - 1].low, newPrice);
+    state.portfolio[state.portfolio.length - 1] = state.cash + state.holdings * newPrice;
+    state.maxNetWorth = Math.max(state.maxNetWorth, state.portfolio[state.portfolio.length - 1]);
+    computeBotSnapshots(newPrice);
+    updateSidebar();
+  }
+
+  function drawAll() {
+    drawMainChart();
+    drawPortfolioChart();
+    drawProfitChart();
+  }
+
+  updateSidebar();
+  resizeCanvases();
+})();
   </script>
 </body>
 </html>
