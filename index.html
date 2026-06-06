@@ -1,0 +1,912 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>QuantSim High Quality</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      background: #09090b;
+      overflow: hidden;
+    }
+    body {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    canvas { display: block; }
+    .glass {
+      background: linear-gradient(180deg, rgba(24,24,27,0.96), rgba(9,9,11,0.96));
+      backdrop-filter: blur(16px);
+    }
+    .panel { box-shadow: inset 0 1px 0 rgba(255,255,255,0.03); }
+    .btn {
+      transition: transform .12s ease, background-color .12s ease, border-color .12s ease, opacity .12s ease;
+    }
+    .btn:active { transform: translateY(1px); }
+    .scrollbar::-webkit-scrollbar { width: 10px; }
+    .scrollbar::-webkit-scrollbar-thumb { background: #27272a; border-radius: 999px; }
+    .scrollbar::-webkit-scrollbar-track { background: #09090b; }
+    .ticker-wrap { overflow: hidden; position: relative; }
+    .ticker {
+      display: inline-block;
+      white-space: nowrap;
+      padding-left: 100%;
+      animation: marquee 18s linear infinite;
+    }
+    @keyframes marquee {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-100%); }
+    }
+    .codebox {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      background: #0a0a0a;
+      color: #d4d4d8;
+      border: 1px solid #27272a;
+      border-radius: 12px;
+      width: 100%;
+      min-height: 180px;
+      resize: vertical;
+      padding: 12px;
+      outline: none;
+      box-sizing: border-box;
+    }
+    .chip { border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.03); }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script>
+    (() => {
+      const app = document.getElementById('app');
+      const dpr = Math.max(1, window.devicePixelRatio || 1);
+      const fmt = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+      const now = () => new Date().toLocaleTimeString();
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const randn = () => {
+        let u = 0, v = 0;
+        while (u === 0) u = Math.random();
+        while (v === 0) v = Math.random();
+        return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+      };
+      const sma = (arr, period, key='close') => {
+        if (arr.length < period) return null;
+        let sum = 0;
+        for (let i = arr.length - period; i < arr.length; i++) sum += arr[i][key];
+        return sum / period;
+      };
+      const ema = (values, period) => {
+        if (!values.length) return [];
+        const k = 2 / (period + 1);
+        const out = [values[0]];
+        for (let i = 1; i < values.length; i++) out.push(values[i] * k + out[i - 1] * (1 - k));
+        return out;
+      };
+      const rsi = (values, period = 14) => {
+        if (values.length <= period) return 50;
+        let gains = 0, losses = 0;
+        for (let i = values.length - period; i < values.length; i++) {
+          const diff = values[i] - values[i - 1];
+          if (diff > 0) gains += diff; else losses -= diff;
+        }
+        if (losses === 0) return 100;
+        const rs = (gains / period) / (losses / period);
+        return 100 - (100 / (1 + rs));
+      };
+      const sharpe = (equity) => {
+        if (equity.length < 12) return 0;
+        const rets = [];
+        for (let i = 1; i < equity.length; i++) rets.push((equity[i] - equity[i - 1]) / Math.max(1e-9, equity[i - 1]));
+        const avg = rets.reduce((a,b)=>a+b, 0) / rets.length;
+        const variance = rets.reduce((a,b)=>a + Math.pow(b - avg, 2), 0) / rets.length;
+        const sd = Math.sqrt(variance) || 1e-9;
+        return (avg / sd) * Math.sqrt(252);
+      };
+
+      const state = {
+        cash: 10000,
+        holdings: 0,
+        isRunning: false,
+        speed: 1,
+        tick: 0,
+        regime: { name: 'Normal', drift: 0.00012, vol: 0.005 },
+        history: [{ open: 100, high: 100, low: 100, close: 100 }],
+        portfolio: [10000],
+        peRatio: 20,
+        maxNetWorth: 10000,
+        trades: [],
+        autoTrade: false,
+        patternBot: false,
+        alpha3Bot: false,
+        customBotEnabled: false,
+        customBotLanguage: 'JavaScript',
+        customBotCode: `// Example custom bot\n// Use market, portfolio and helpers\nif (market.rsi < 30) {\n  return { action: 'BUY_ALL' };\n}\nif (market.rsi > 70) {\n  return { action: 'SELL_ALL' };\n}\nreturn { action: 'HOLD' };`,
+        customBotProfit: 0,
+        botStats: {
+          sma: { equity: [10000], profit: 0, sharpe: 0 },
+          pattern: { equity: [10000], profit: 0, sharpe: 0 },
+          alpha3: { equity: [10000], profit: 0, sharpe: 0 },
+          custom: { equity: [10000], profit: 0, sharpe: 0 }
+        },
+        aiAdvice: '',
+        analyst: '',
+        news: null,
+        polygonKey: '',
+        ticker: 'AAPL',
+        polygonError: '',
+        isFetchingPolygon: false,
+        isFetchingAI: false,
+        isFetchingAnalyst: false,
+        isFetchingNews: false,
+        isFetchingRegime: false,
+        lastDrawnPrice: 100,
+        netWorthTrail: [10000],
+        drawdownPeak: 10000,
+        tickerNote: 'SMA Sharpe: 0.00 | Pattern Sharpe: 0.00 | Alpha3 Sharpe: 0.00 | Custom Sharpe: 0.00'
+      };
+
+      const stateRefs = {
+        cash: () => state.cash,
+        holdings: () => state.holdings,
+        history: () => state.history,
+        portfolio: () => state.portfolio,
+        regime: () => state.regime,
+      };
+
+      const html = `
+      <div class="flex h-screen text-zinc-200 bg-zinc-950 overflow-hidden">
+        <aside class="w-[360px] shrink-0 border-r border-zinc-800 glass overflow-y-auto scrollbar">
+          <div class="px-4 py-4 border-b border-zinc-800 flex items-center gap-3">
+            <div class="w-9 h-9 rounded-xl bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">◎</div>
+            <div>
+              <div class="text-lg font-semibold tracking-wide text-white">QuantSim HQ</div>
+              <div class="text-xs text-zinc-500">High quality trading simulator</div>
+            </div>
+          </div>
+
+          <div class="p-4 space-y-4">
+            <section class="space-y-2">
+              <div class="text-xs uppercase tracking-[0.25em] text-zinc-500">Polygon.io Data</div>
+              <div class="card panel rounded-xl border border-zinc-800 p-3 space-y-2 bg-zinc-900/70">
+                <input id="polygonKey" type="password" placeholder="Polygon API Key" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-sm outline-none focus:border-blue-500" />
+                <div class="flex gap-2">
+                  <input id="tickerInput" type="text" value="AAPL" placeholder="Ticker" class="w-full uppercase bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-sm outline-none focus:border-blue-500" />
+                  <button id="loadPolygon" class="btn px-3 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold">Load</button>
+                </div>
+                <div id="polygonError" class="text-[11px] text-red-400"></div>
+              </div>
+            </section>
+
+            <section class="space-y-2">
+              <div class="text-xs uppercase tracking-[0.25em] text-zinc-500">Portfolio</div>
+              <div class="card panel rounded-xl border border-zinc-800 p-3 bg-zinc-900/70">
+                <div class="text-xs text-zinc-500">Net Worth</div>
+                <div id="netWorth" class="text-2xl font-semibold text-white">$10,000.00</div>
+                <div class="mt-3 flex justify-between text-sm">
+                  <div><span class="text-zinc-500">Cash:</span> <span id="cashVal">$10,000.00</span></div>
+                  <div><span class="text-zinc-500">Pos:</span> <span id="holdingsVal">0</span></div>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <div class="card rounded-xl border border-zinc-800 p-3 bg-zinc-900/70">
+                  <div class="text-zinc-500">P/E Ratio</div>
+                  <div id="peRatio" class="font-bold text-white">20.00</div>
+                </div>
+                <div class="card rounded-xl border border-zinc-800 p-3 bg-zinc-900/70">
+                  <div class="text-zinc-500">Sharpe Ratio</div>
+                  <div id="mainSharpe" class="font-bold text-white">0.00</div>
+                </div>
+                <div class="card rounded-xl border border-zinc-800 p-3 bg-zinc-900/70 col-span-2">
+                  <div class="text-zinc-500">Max Drawdown</div>
+                  <div id="maxDrawdown" class="font-bold text-red-400">0.00%</div>
+                </div>
+              </div>
+            </section>
+
+            <section class="space-y-2">
+              <div class="text-xs uppercase tracking-[0.25em] text-zinc-500">Simulation Engine</div>
+              <div class="grid grid-cols-2 gap-2">
+                <button id="toggleRun" class="btn rounded-lg p-2 bg-emerald-500/15 text-emerald-300 border border-emerald-500/20 font-semibold">START</button>
+                <button id="toggleSpeed" class="btn rounded-lg p-2 bg-zinc-900 border border-zinc-800 font-semibold">1x</button>
+              </div>
+              <div class="text-xs text-center text-zinc-500"><span>Regime:</span> <span id="regimeLabel" class="text-zinc-300">Normal</span></div>
+              <button id="customRegime" class="btn w-full rounded-lg p-2 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 font-semibold">AI Custom Regime ✨</button>
+            </section>
+
+            <section class="space-y-2">
+              <div class="text-xs uppercase tracking-[0.25em] text-zinc-500">Manual Order</div>
+              <div class="grid grid-cols-2 gap-2">
+                <button id="buy1" class="btn rounded-lg p-2 bg-zinc-900 border border-zinc-800 hover:border-emerald-500/40 font-semibold">Buy 1 Qty</button>
+                <button id="sell1" class="btn rounded-lg p-2 bg-zinc-900 border border-zinc-800 hover:border-red-500/40 font-semibold">Sell 1 Qty</button>
+              </div>
+              <button id="sellAll" class="btn w-full rounded-lg p-2 bg-zinc-900 border border-zinc-800 hover:border-red-500/40 font-semibold">Liquidate Position</button>
+            </section>
+
+            <section class="space-y-2 pt-3 border-t border-zinc-800">
+              <div class="flex items-center justify-between">
+                <div class="text-xs uppercase tracking-[0.25em] text-zinc-500">Quantitative Bots</div>
+                <div class="text-xs text-zinc-500">4 bots + custom</div>
+              </div>
+              <button id="smaBtn" class="btn w-full rounded-lg p-2 bg-zinc-900 border border-zinc-800 font-semibold">Enable SMA Bot</button>
+              <button id="patternBtn" class="btn w-full rounded-lg p-2 bg-zinc-900 border border-zinc-800 font-semibold">Enable Pattern Bot</button>
+              <button id="alphaBtn" class="btn w-full rounded-lg p-2 bg-zinc-900 border border-zinc-800 font-semibold">Enable Alpha 3 Bot</button>
+
+              <div class="card panel rounded-xl border border-zinc-800 p-3 bg-zinc-900/70 space-y-3">
+                <div class="flex items-center justify-between">
+                  <div>
+                    <div class="font-semibold text-white">My Custom Bot</div>
+                    <div class="text-xs text-zinc-500">Any language can be implemented via this panel</div>
+                  </div>
+                  <button id="customBotToggle" class="btn rounded-lg px-3 py-2 bg-zinc-800 border border-zinc-700 font-semibold">Off</button>
+                </div>
+                <select id="botLang" class="w-full bg-zinc-950 border border-zinc-800 rounded-lg p-2 text-sm outline-none">
+                  <option>JavaScript</option>
+                  <option>Python</option>
+                  <option>TypeScript</option>
+                  <option>JSON Rules</option>
+                  <option>Lua</option>
+                  <option>WASM</option>
+                </select>
+                <textarea id="customCode" class="codebox" spellcheck="false"></textarea>
+                <div class="grid grid-cols-2 gap-2">
+                  <button id="runCustom" class="btn rounded-lg p-2 bg-blue-600 text-white font-semibold">Run Custom Bot</button>
+                  <button id="resetCustom" class="btn rounded-lg p-2 bg-zinc-800 border border-zinc-700 font-semibold">Reset</button>
+                </div>
+              </div>
+
+              <div class="card panel rounded-xl border border-zinc-800 p-3 bg-zinc-900/70">
+                <div class="text-sm font-semibold text-white mb-2">Bot Profit Comparison</div>
+                <canvas id="profitChart" width="320" height="180" style="width:100%;height:180px;"></canvas>
+                <div class="mt-2 text-xs text-zinc-500">Which bot is winning by profit.</div>
+              </div>
+
+              <div class="card panel rounded-xl border border-zinc-800 p-3 bg-zinc-900/70">
+                <div class="text-sm font-semibold text-white mb-2">AI Agents</div>
+                <button id="aiAdviceBtn" class="btn w-full rounded-lg p-2 bg-purple-500/10 text-purple-300 border border-purple-500/20 font-semibold">AI Portfolio Review ✨</button>
+                <button id="newsBtn" class="btn w-full rounded-lg p-2 mt-2 bg-orange-500/10 text-orange-300 border border-orange-500/20 font-semibold">Inject AI News Event ✨</button>
+                <button id="analysisBtn" class="btn w-full rounded-lg p-2 mt-2 bg-sky-500/10 text-sky-300 border border-sky-500/20 font-semibold">AI Tech Analysis ✨</button>
+                <div id="aiOutput" class="mt-3 text-xs text-zinc-300 leading-relaxed"></div>
+              </div>
+            </section>
+          </div>
+        </aside>
+
+        <main class="flex-1 flex flex-col gap-2 p-2 min-w-0">
+          <div class="ticker-wrap rounded-xl border border-zinc-800 bg-zinc-900/70 px-4 py-2 text-xs text-zinc-300 panel">
+            <div id="tickerText" class="ticker">SMA Sharpe: 0.00 | Pattern Sharpe: 0.00 | Alpha3 Sharpe: 0.00 | Custom Sharpe: 0.00</div>
+          </div>
+
+          <div class="relative flex-1 min-h-0 rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden panel" id="chartWrap">
+            <div class="absolute top-4 left-4 z-10 pointer-events-none">
+              <div class="text-4xl font-light tracking-tight text-white flex items-center gap-2">
+                <span id="priceLabel">$100.00</span>
+                <span id="trendIcon" class="text-emerald-400">▲</span>
+              </div>
+              <div class="mt-1 text-xs text-zinc-500">Candlestick market chart</div>
+            </div>
+            <canvas id="mainChart"></canvas>
+            <div class="absolute bottom-4 left-4 flex gap-4 text-xs text-zinc-300 font-semibold">
+              <div class="flex items-center gap-1"><span class="w-3 h-1 bg-sky-500 inline-block"></span> SMA(5)</div>
+              <div class="flex items-center gap-1"><span class="w-3 h-1 bg-yellow-400 inline-block"></span> SMA(15)</div>
+              <div class="flex items-center gap-1"><span class="w-3 h-0 border-t-2 border-dashed border-violet-500 inline-block"></span> SMA(100)</div>
+            </div>
+          </div>
+
+          <div class="relative h-56 rounded-2xl border border-zinc-800 bg-zinc-950 overflow-hidden panel" id="portfolioWrap">
+            <div class="absolute top-3 left-4 z-10 pointer-events-none">
+              <div class="text-sm font-semibold text-zinc-400">Net Worth Over Time</div>
+            </div>
+            <canvas id="portfolioChart"></canvas>
+          </div>
+        </main>
+
+        <aside class="w-72 shrink-0 border-l border-zinc-800 glass flex flex-col overflow-hidden">
+          <div class="px-4 py-4 border-b border-zinc-800">
+            <div class="text-sm font-bold uppercase tracking-[0.2em] text-white">Execution Log</div>
+          </div>
+          <div id="tradeLog" class="flex-1 overflow-y-auto scrollbar p-2 space-y-2"></div>
+          <div class="border-t border-zinc-800 p-3 text-xs text-zinc-500">
+            Bot ranking is based on profit, Sharpe ratio, and drawdown.
+          </div>
+        </aside>
+      </div>
+      `;
+
+      app.innerHTML = html;
+
+      const el = (id) => document.getElementById(id);
+      const mainChart = el('mainChart');
+      const portfolioChart = el('portfolioChart');
+      const profitChart = el('profitChart');
+      const chartWrap = el('chartWrap');
+      const portfolioWrap = el('portfolioWrap');
+
+      const ctxMain = mainChart.getContext('2d');
+      const ctxPortfolio = portfolioChart.getContext('2d');
+      const ctxProfit = profitChart.getContext('2d');
+
+      const botNames = ['sma', 'pattern', 'alpha3', 'custom'];
+      const botLabel = { sma: 'SMA', pattern: 'Pattern', alpha3: 'Alpha3', custom: 'Custom' };
+
+      function setupCanvas(canvas, wrap) {
+        const rect = wrap.getBoundingClientRect();
+        canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+        canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+        canvas.style.width = rect.width + 'px';
+        canvas.style.height = rect.height + 'px';
+        const ctx = canvas.getContext('2d');
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        ctx.imageSmoothingEnabled = true;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+      }
+
+      function resizeCanvases() {
+        setupCanvas(mainChart, chartWrap);
+        setupCanvas(portfolioChart, portfolioWrap);
+        setupCanvas(profitChart, el('profitChart').parentElement);
+        renderAll();
+      }
+
+      function trade(type, price, qty, source = 'MANUAL', bot = null) {
+        if (bot) {
+          const entry = state.botStats[bot];
+          const value = state.cash + state.holdings * price;
+          entry.equity.push(value);
+          entry.profit = value - 10000;
+          entry.sharpe = sharpe(entry.equity);
+        }
+        state.trades.unshift({ id: Date.now() + Math.random(), type, price, qty, time: now(), source });
+        state.trades = state.trades.slice(0, 60);
+      }
+
+      function applyManualTrade(type) {
+        const price = state.history[state.history.length - 1].close;
+        if (type === 'BUY' && state.cash >= price) {
+          const qty = 1;
+          state.cash -= price * qty;
+          state.holdings += qty;
+          trade('BUY', price, qty, 'MANUAL');
+        } else if (type === 'SELL' && state.holdings > 0) {
+          const qty = 1;
+          state.cash += price * qty;
+          state.holdings -= qty;
+          trade('SELL', price, qty, 'MANUAL');
+        } else if (type === 'SELL_ALL' && state.holdings > 0) {
+          const qty = state.holdings;
+          state.cash += price * qty;
+          state.holdings = 0;
+          trade('SELL_ALL', price, qty, 'MANUAL');
+        }
+        syncPortfolio(price);
+      }
+
+      function syncPortfolio(price) {
+        const netWorth = state.cash + state.holdings * price;
+        state.portfolio[state.portfolio.length - 1] = netWorth;
+        state.netWorthTrail[state.netWorthTrail.length - 1] = netWorth;
+        state.maxNetWorth = Math.max(state.maxNetWorth, netWorth);
+        state.drawdownPeak = Math.max(state.drawdownPeak, netWorth);
+      }
+
+      function priceStep() {
+        const last = state.history[state.history.length - 1];
+        const drift = state.regime.drift;
+        const vol = state.regime.vol;
+        const momentum = (state.history.length > 2 ? (state.history[state.history.length - 1].close - state.history[state.history.length - 2].close) / Math.max(1e-9, state.history[state.history.length - 2].close) : 0);
+        const changePct = drift + vol * (0.55 * randn() + 0.2 * momentum);
+        const newPrice = Math.max(0.01, last.close * (1 + changePct));
+        const currentNetWorth = state.cash + state.holdings * newPrice;
+
+        state.peRatio = Math.max(5, state.peRatio + (20 - state.peRatio) * 0.05 + randn() * 0.25);
+        state.maxNetWorth = Math.max(state.maxNetWorth, currentNetWorth);
+        state.drawdownPeak = Math.max(state.drawdownPeak, currentNetWorth);
+
+        if (state.tick % 5 === 0 && state.tick !== 0) {
+          state.history.push({ open: newPrice, high: newPrice, low: newPrice, close: newPrice });
+          state.portfolio.push(currentNetWorth);
+          state.netWorthTrail.push(currentNetWorth);
+        } else {
+          const c = { ...state.history[state.history.length - 1] };
+          c.close = newPrice;
+          c.high = Math.max(c.high, newPrice);
+          c.low = Math.min(c.low, newPrice);
+          state.history[state.history.length - 1] = c;
+          state.portfolio[state.portfolio.length - 1] = currentNetWorth;
+          state.netWorthTrail[state.netWorthTrail.length - 1] = currentNetWorth;
+        }
+
+        if (state.history.length > 240) state.history.shift();
+        if (state.portfolio.length > 120) state.portfolio.shift();
+        if (state.netWorthTrail.length > 120) state.netWorthTrail.shift();
+
+        state.tick += 1;
+        if (state.tick > 0 && state.tick % 300 === 0) {
+          const r = Math.random();
+          if (r < 0.33) state.regime = { name: 'Bull Market', drift: 0.001, vol: 0.008 };
+          else if (r < 0.66) state.regime = { name: 'Bear Market', drift: -0.001, vol: 0.012 };
+          else state.regime = { name: 'Normal', drift: 0.00012, vol: 0.005 };
+        }
+
+        runBots(newPrice);
+        renderAll();
+      }
+
+      function runBots(price) {
+        const closes = state.history.map(c => c.close);
+        const current = state.history[state.history.length - 1];
+        const currentValue = state.cash + state.holdings * price;
+        const rsi14 = rsi(closes, 14);
+        const ema20 = ema(closes, 20);
+        const ema50 = ema(closes, 50);
+        const ema12 = ema(closes, 12);
+        const ema26 = ema(closes, 26);
+        const macdLine = ema12.map((v, i) => v - (ema26[i] ?? ema26[ema26.length - 1] ?? v));
+        const macdSignal = ema(macdLine, 9);
+        const macdHist = macdLine.map((v, i) => v - (macdSignal[i] ?? macdSignal[macdSignal.length - 1] ?? v));
+        const currEMA20 = ema20[ema20.length - 1] ?? price;
+        const currEMA50 = ema50[ema50.length - 1] ?? price;
+        const currMACDHist = macdHist[macdHist.length - 1] ?? 0;
+        const prevMACDHist = macdHist[macdHist.length - 2] ?? currMACDHist;
+        const sma100 = sma(state.history, 100) ?? price;
+
+        const shortSMA = sma(state.history, 5);
+        const longSMA = sma(state.history, 15);
+        const prevShortSMA = state.history.length >= 6 ? sma(state.history.slice(0, -1), 5) : null;
+        const prevLongSMA = state.history.length >= 16 ? sma(state.history.slice(0, -1), 15) : null;
+
+        if (state.autoTrade && shortSMA && longSMA && prevShortSMA && prevLongSMA) {
+          const up = shortSMA > longSMA && prevShortSMA <= prevLongSMA;
+          const down = shortSMA < longSMA && prevShortSMA >= prevLongSMA;
+          if (up && state.cash >= price) {
+            const qty = Math.floor(state.cash / price);
+            if (qty > 0) {
+              state.cash -= qty * price;
+              state.holdings += qty;
+              trade('BOT_BUY', price, qty, 'SMA', 'sma');
+            }
+          } else if (down && state.holdings > 0) {
+            const qty = state.holdings;
+            state.cash += qty * price;
+            state.holdings = 0;
+            trade('BOT_SELL', price, qty, 'SMA', 'sma');
+          }
+        }
+
+        if (state.patternBot && state.tick % 5 === 0 && state.history.length >= 3) {
+          const curr = state.history[state.history.length - 2];
+          const prev = state.history[state.history.length - 3];
+          if (curr && prev) {
+            const body = Math.abs(curr.close - curr.open);
+            const lowerWick = Math.min(curr.open, curr.close) - curr.low;
+            const upperWick = curr.high - Math.max(curr.open, curr.close);
+            const bullishEngulfing = prev.close < prev.open && curr.close > curr.open && curr.close >= prev.open && curr.open <= prev.close;
+            const bearishEngulfing = prev.close > prev.open && curr.close < curr.open && curr.close <= prev.open && curr.open >= prev.close;
+            const bullishPinbar = lowerWick > body * 2 && upperWick <= body;
+            const bearishPinbar = upperWick > body * 2 && lowerWick <= body;
+            const bullish = bullishEngulfing || bullishPinbar;
+            const bearish = bearishEngulfing || bearishPinbar;
+            if (bullish && price > sma100 && state.cash >= price) {
+              const qty = Math.floor(state.cash / price);
+              if (qty > 0) {
+                state.cash -= qty * price;
+                state.holdings += qty;
+                trade('PATTERN_BUY', price, qty, 'PATTERN', 'pattern');
+              }
+            } else if (bearish && price < sma100 && state.holdings > 0) {
+              const qty = state.holdings;
+              state.cash += qty * price;
+              state.holdings = 0;
+              trade('PATTERN_SELL', price, qty, 'PATTERN', 'pattern');
+            }
+          }
+        }
+
+        if (state.alpha3Bot && state.tick % 5 === 0) {
+          const trendUp = price > currEMA50 && currEMA20 > currEMA50;
+          const macdImpulse = currMACDHist > 0 && currMACDHist > prevMACDHist;
+          const rsiZone = rsi14 >= 52 && rsi14 <= 72;
+          const buySignal = trendUp && macdImpulse && rsiZone;
+          const exitSignal = price < currEMA20 || currMACDHist < 0;
+          if (buySignal && state.cash >= price) {
+            const qty = Math.floor(state.cash / price);
+            if (qty > 0) {
+              state.cash -= qty * price;
+              state.holdings += qty;
+              trade('ALPHA3_BUY', price, qty, 'ALPHA3', 'alpha3');
+            }
+          } else if (exitSignal && state.holdings > 0) {
+            const qty = state.holdings;
+            state.cash += qty * price;
+            state.holdings = 0;
+            trade('ALPHA3_SELL', price, qty, 'ALPHA3', 'alpha3');
+          }
+        }
+
+        if (state.customBotEnabled) {
+          const market = { price, rsi: rsi14, sma100, ema20: currEMA20, ema50: currEMA50, regime: state.regime.name, vol: state.regime.vol };
+          const portfolio = { cash: state.cash, holdings: state.holdings, netWorth: currentValue };
+          const helpers = {
+            buyAll: () => state.cash >= price ? { action: 'BUY_ALL' } : { action: 'HOLD' },
+            sellAll: () => state.holdings > 0 ? { action: 'SELL_ALL' } : { action: 'HOLD' },
+            buy1: () => ({ action: 'BUY_1' }),
+            sell1: () => ({ action: 'SELL_1' }),
+            hold: () => ({ action: 'HOLD' })
+          };
+          let decision = { action: 'HOLD' };
+          try {
+            const code = state.customBotCode.trim();
+            if (state.customBotLanguage === 'JavaScript' || state.customBotLanguage === 'TypeScript') {
+              const fn = new Function('market', 'portfolio', 'helpers', 'fmt', `"use strict";\n${code}\n`);
+              const out = fn(market, portfolio, helpers, fmt);
+              if (out && typeof out === 'object') decision = out;
+            } else if (state.customBotLanguage === 'JSON Rules') {
+              const rules = JSON.parse(code || '{}');
+              if (Array.isArray(rules.rules)) {
+                for (const rule of rules.rules) {
+                  const cond = String(rule.when || '');
+                  const act = String(rule.then || 'HOLD');
+                  const ok = Function('market', 'portfolio', `return (${cond});`)(market, portfolio);
+                  if (ok) { decision = { action: act }; break; }
+                }
+              }
+            } else {
+              const lower = code.toLowerCase();
+              if (lower.includes('rsi') && market.rsi < 30) decision = { action: 'BUY_ALL' };
+              else if (lower.includes('rsi') && market.rsi > 70) decision = { action: 'SELL_ALL' };
+              else decision = { action: 'HOLD' };
+            }
+          } catch (e) {
+            decision = { action: 'HOLD', error: e.message };
+          }
+
+          if (decision.action === 'BUY_ALL' && state.cash >= price) {
+            const qty = Math.floor(state.cash / price);
+            if (qty > 0) {
+              state.cash -= qty * price;
+              state.holdings += qty;
+              trade('CUSTOM_BUY', price, qty, 'CUSTOM', 'custom');
+            }
+          } else if (decision.action === 'SELL_ALL' && state.holdings > 0) {
+            const qty = state.holdings;
+            state.cash += qty * price;
+            state.holdings = 0;
+            trade('CUSTOM_SELL', price, qty, 'CUSTOM', 'custom');
+          } else if (decision.action === 'BUY_1' && state.cash >= price) {
+            state.cash -= price;
+            state.holdings += 1;
+            trade('CUSTOM_BUY', price, 1, 'CUSTOM', 'custom');
+          } else if (decision.action === 'SELL_1' && state.holdings > 0) {
+            state.cash += price;
+            state.holdings -= 1;
+            trade('CUSTOM_SELL', price, 1, 'CUSTOM', 'custom');
+          }
+
+          state.customBotProfit = (state.cash + state.holdings * price) - 10000;
+          const currNet = state.cash + state.holdings * price;
+          state.botStats.custom.equity.push(currNet);
+          state.botStats.custom.profit = currNet - 10000;
+          state.botStats.custom.sharpe = sharpe(state.botStats.custom.equity);
+        }
+
+        state.portfolio[state.portfolio.length - 1] = state.cash + state.holdings * price;
+        state.botStats.sma.profit = state.botStats.sma.equity[state.botStats.sma.equity.length - 1] - 10000;
+        state.botStats.pattern.profit = state.botStats.pattern.equity[state.botStats.pattern.equity.length - 1] - 10000;
+        state.botStats.alpha3.profit = state.botStats.alpha3.equity[state.botStats.alpha3.equity.length - 1] - 10000;
+      }
+
+      function computeBotSnapshots(price) {
+        const total = state.cash + state.holdings * price;
+        state.botStats.sma.equity.push(total);
+        state.botStats.pattern.equity.push(total);
+        state.botStats.alpha3.equity.push(total);
+        state.botStats.sma.profit = state.botStats.sma.equity[state.botStats.sma.equity.length - 1] - 10000;
+        state.botStats.pattern.profit = state.botStats.pattern.equity[state.botStats.pattern.equity.length - 1] - 10000;
+        state.botStats.alpha3.profit = state.botStats.alpha3.equity[state.botStats.alpha3.equity.length - 1] - 10000;
+        state.botStats.sma.sharpe = sharpe(state.botStats.sma.equity);
+        state.botStats.pattern.sharpe = sharpe(state.botStats.pattern.equity);
+        state.botStats.alpha3.sharpe = sharpe(state.botStats.alpha3.equity);
+        state.botStats.custom.sharpe = sharpe(state.botStats.custom.equity);
+      }
+
+      function drawMainChart() {
+        const rect = chartWrap.getBoundingClientRect();
+        const width = rect.width;
+        const height = rect.height;
+        ctxMain.clearRect(0, 0, width, height);
+        if (!state.history.length) return;
+        ctxMain.fillStyle = '#09090b';
+        ctxMain.fillRect(0, 0, width, height);
+
+        ctxMain.strokeStyle = '#1f1f23';
+        ctxMain.lineWidth = 1;
+        for (let i = 1; i < 10; i++) {
+          const y = height * (i / 10);
+          ctxMain.beginPath();
+          ctxMain.moveTo(0, y);
+          ctxMain.lineTo(width, y);
+          ctxMain.stroke();
+        }
+
+        const visible = 90;
+        const start = Math.max(0, state.history.length - visible);
+        const data = state.history.slice(start);
+        const minP = Math.min(...data.map(c => c.low)) * 0.985;
+        const maxP = Math.max(...data.map(c => c.high)) * 1.015;
+        const range = Math.max(1e-9, maxP - minP);
+        const candleW = width / visible;
+        const bodyW = Math.max(2, candleW * 0.74);
+        const getY = (p) => height - ((p - minP) / range) * (height - 20) - 10;
+
+        data.forEach((c, i) => {
+          const x = i * candleW;
+          const up = c.close >= c.open;
+          ctxMain.strokeStyle = up ? '#22c55e' : '#ef4444';
+          ctxMain.fillStyle = up ? '#22c55e' : '#ef4444';
+          ctxMain.lineWidth = 1.4;
+          ctxMain.beginPath();
+          ctxMain.moveTo(x + candleW / 2, getY(c.high));
+          ctxMain.lineTo(x + candleW / 2, getY(c.low));
+          ctxMain.stroke();
+          const y1 = getY(c.open), y2 = getY(c.close);
+          const rectY = Math.min(y1, y2);
+          const rectH = Math.max(1, Math.abs(y2 - y1));
+          ctxMain.fillRect(x + (candleW - bodyW) / 2, rectY, bodyW, rectH);
+        });
+
+        const lineMap = [
+          { p: 5, color: '#3b82f6', dash: [] },
+          { p: 15, color: '#eab308', dash: [] },
+          { p: 100, color: '#a855f7', dash: [6, 6] },
+        ];
+        for (const item of lineMap) {
+          ctxMain.strokeStyle = item.color;
+          ctxMain.lineWidth = 2.2;
+          ctxMain.setLineDash(item.dash);
+          ctxMain.beginPath();
+          let started = false;
+          for (let i = 0; i < state.history.length; i++) {
+            if (i < item.p - 1 || i < start) continue;
+            const avg = sma(state.history.slice(0, i + 1), item.p);
+            if (avg == null) continue;
+            const x = (i - start) * candleW + candleW / 2;
+            const y = getY(avg);
+            if (!started) { ctxMain.moveTo(x, y); started = true; } else { ctxMain.lineTo(x, y); }
+          }
+          ctxMain.stroke();
+          ctxMain.setLineDash([]);
+        }
+
+        const last = state.history[state.history.length - 1];
+        const lastY = getY(last.close);
+        ctxMain.strokeStyle = '#71717a';
+        ctxMain.setLineDash([6, 6]);
+        ctxMain.beginPath();
+        ctxMain.moveTo(0, lastY);
+        ctxMain.lineTo(width, lastY);
+        ctxMain.stroke();
+        ctxMain.setLineDash([]);
+      }
+
+      function drawPortfolioChart() {
+        const rect = portfolioWrap.getBoundingClientRect();
+        const width = rect.width;
+        const height = rect.height;
+        ctxPortfolio.clearRect(0, 0, width, height);
+        if (!state.portfolio.length) return;
+        ctxPortfolio.fillStyle = '#09090b';
+        ctxPortfolio.fillRect(0, 0, width, height);
+        const minV = Math.min(...state.portfolio) * 0.99;
+        const maxV = Math.max(...state.portfolio) * 1.01;
+        const range = Math.max(1e-9, maxV - minV);
+        const visible = 100;
+        const step = width / visible;
+        const getY = (v) => height - ((v - minV) / range) * (height - 20) - 10;
+        ctxPortfolio.beginPath();
+        ctxPortfolio.strokeStyle = '#a855f7';
+        ctxPortfolio.lineWidth = 2.2;
+        state.portfolio.forEach((v, i) => {
+          const x = (visible - state.portfolio.length + i) * step;
+          const y = getY(v);
+          if (i === 0) ctxPortfolio.moveTo(x, y);
+          else ctxPortfolio.lineTo(x, y);
+        });
+        ctxPortfolio.stroke();
+        ctxPortfolio.lineTo((visible - 1) * step, height);
+        ctxPortfolio.lineTo((visible - state.portfolio.length) * step, height);
+        ctxPortfolio.closePath();
+        const g = ctxPortfolio.createLinearGradient(0, 0, 0, height);
+        g.addColorStop(0, 'rgba(168,85,247,0.25)');
+        g.addColorStop(1, 'rgba(168,85,247,0)');
+        ctxPortfolio.fillStyle = g;
+        ctxPortfolio.fill();
+      }
+
+      function drawProfitChart() {
+        const width = profitChart.width / dpr;
+        const height = profitChart.height / dpr;
+        ctxProfit.clearRect(0, 0, width, height);
+        ctxProfit.fillStyle = '#09090b';
+        ctxProfit.fillRect(0, 0, width, height);
+
+        const bots = botNames.map(k => ({
+          key: k,
+          label: botLabel[k],
+          profit: state.botStats[k].profit,
+          sharpe: state.botStats[k].sharpe,
+          color: k === 'sma' ? '#3b82f6' : k === 'pattern' ? '#a855f7' : k === 'alpha3' ? '#22c55e' : '#f59e0b'
+        }));
+        const maxAbs = Math.max(1, ...bots.map(b => Math.abs(b.profit)));
+        const barW = (width - 60) / bots.length - 12;
+        const baseY = height - 34;
+        ctxProfit.fillStyle = '#a1a1aa';
+        ctxProfit.font = '11px ui-monospace, monospace';
+        bots.forEach((b, i) => {
+          const x = 16 + i * ((width - 40) / bots.length);
+          const barH = (Math.abs(b.profit) / maxAbs) * (height - 70);
+          const y = baseY - barH;
+          ctxProfit.fillStyle = b.color;
+          ctxProfit.fillRect(x, y, barW, barH);
+          ctxProfit.fillStyle = '#e4e4e7';
+          ctxProfit.fillText(b.label, x, height - 18);
+          ctxProfit.fillStyle = '#a1a1aa';
+          ctxProfit.fillText((b.profit >= 0 ? '+' : '') + fmt.format(b.profit), x, Math.max(12, y - 6));
+        });
+      }
+
+      function renderTrades() {
+        const log = el('tradeLog');
+        log.innerHTML = state.trades.length ? state.trades.map(t => `
+          <div class="rounded-xl border border-zinc-800 bg-zinc-900/80 p-2 text-xs flex justify-between gap-3">
+            <div>
+              <div class="font-bold ${String(t.type).includes('BUY') ? 'text-emerald-400' : 'text-red-400'}">${t.type.replaceAll('_', ' ')}</div>
+              <div class="text-zinc-500">${t.time} · ${t.source}</div>
+            </div>
+            <div class="text-right">
+              <div class="text-zinc-100">${fmt.format(t.price)}</div>
+              <div class="text-zinc-500">x${t.qty}</div>
+            </div>
+          </div>
+        `).join('') : `<div class="text-center text-zinc-600 mt-4 text-xs">No trades executed</div>`;
+      }
+
+      function updateUI() {
+        const price = state.history[state.history.length - 1].close;
+        const netWorth = state.cash + state.holdings * price;
+        const currentTrail = state.netWorthTrail.length ? state.netWorthTrail : [netWorth];
+        const mainSharpe = sharpe(currentTrail);
+        const drawdown = state.maxNetWorth > 0 ? ((netWorth - state.maxNetWorth) / state.maxNetWorth) * 100 : 0;
+        el('netWorth').textContent = fmt.format(netWorth);
+        el('cashVal').textContent = fmt.format(state.cash);
+        el('holdingsVal').textContent = String(state.holdings);
+        el('peRatio').textContent = state.peRatio.toFixed(2);
+        el('mainSharpe').textContent = mainSharpe.toFixed(2);
+        el('maxDrawdown').textContent = drawdown.toFixed(2) + '%';
+        el('regimeLabel').textContent = state.regime.name;
+        el('priceLabel').textContent = fmt.format(price);
+        el('trendIcon').textContent = state.history.length > 1 && price >= state.history[state.history.length - 2].close ? '▲' : '▼';
+        el('trendIcon').className = state.history.length > 1 && price >= state.history[state.history.length - 2].close ? 'text-emerald-400' : 'text-red-400';
+        el('polygonError').textContent = state.polygonError;
+        el('tickerText').textContent = `SMA Sharpe: ${state.botStats.sma.sharpe.toFixed(2)} | Pattern Sharpe: ${state.botStats.pattern.sharpe.toFixed(2)} | Alpha3 Sharpe: ${state.botStats.alpha3.sharpe.toFixed(2)} | Custom Sharpe: ${state.botStats.custom.sharpe.toFixed(2)}`;
+        el('tickerNote').textContent = state.tickerNote;
+        const ai = [state.aiAdvice, state.analyst, state.news ? state.news.text : ''].filter(Boolean).join('\n\n');
+        if (ai) el('aiOutput').textContent = ai;
+        renderTrades();
+        drawMainChart();
+        drawPortfolioChart();
+        drawProfitChart();
+      }
+
+      function renderAll() {
+        updateUI();
+      }
+
+      function setTradeButtons() {
+        const map = [
+          ['smaBtn', 'autoTrade', 'SMA Bot Active', 'Enable SMA Bot'],
+          ['patternBtn', 'patternBot', 'Pattern Bot Active', 'Enable Pattern Bot'],
+          ['alphaBtn', 'alpha3Bot', 'Alpha 3 Bot Active', 'Enable Alpha 3 Bot'],
+          ['customBotToggle', 'customBotEnabled', 'On', 'Off'],
+        ];
+        for (const [id, key, onText, offText] of map) {
+          const btn = el(id);
+          const active = state[key];
+          btn.textContent = active ? onText : offText;
+          btn.classList.toggle('bg-blue-500/20', active && id === 'smaBtn');
+          btn.classList.toggle('border-blue-500/40', active && id === 'smaBtn');
+          btn.classList.toggle('text-blue-300', active && id === 'smaBtn');
+          btn.classList.toggle('bg-purple-500/20', active && id === 'patternBtn');
+          btn.classList.toggle('border-purple-500/40', active && id === 'patternBtn');
+          btn.classList.toggle('text-purple-300', active && id === 'patternBtn');
+          btn.classList.toggle('bg-cyan-500/20', active && id === 'alphaBtn');
+          btn.classList.toggle('border-cyan-500/40', active && id === 'alphaBtn');
+          btn.classList.toggle('text-cyan-300', active && id === 'alphaBtn');
+          btn.classList.toggle('bg-emerald-500/20', active && id === 'customBotToggle');
+          btn.classList.toggle('border-emerald-500/40', active && id === 'customBotToggle');
+        }
+      }
+
+      el('toggleRun').addEventListener('click', () => {
+        state.isRunning = !state.isRunning;
+        el('toggleRun').textContent = state.isRunning ? 'HALT' : 'START';
+        el('toggleRun').className = `btn rounded-lg p-2 font-semibold border ${state.isRunning ? 'bg-red-500/15 text-red-300 border-red-500/20' : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/20'}`;
+      });
+      el('toggleSpeed').addEventListener('click', () => {
+        state.speed = state.speed === 1 ? 5 : state.speed === 5 ? 20 : 1;
+        el('toggleSpeed').textContent = state.speed + 'x';
+      });
+      el('buy1').addEventListener('click', () => applyManualTrade('BUY'));
+      el('sell1').addEventListener('click', () => applyManualTrade('SELL'));
+      el('sellAll').addEventListener('click', () => applyManualTrade('SELL_ALL'));
+      el('smaBtn').addEventListener('click', () => { state.autoTrade = !state.autoTrade; setTradeButtons(); });
+      el('patternBtn').addEventListener('click', () => { state.patternBot = !state.patternBot; setTradeButtons(); });
+      el('alphaBtn').addEventListener('click', () => { state.alpha3Bot = !state.alpha3Bot; setTradeButtons(); });
+      el('customBotToggle').addEventListener('click', () => { state.customBotEnabled = !state.customBotEnabled; setTradeButtons(); });
+      el('botLang').addEventListener('change', (e) => state.customBotLanguage = e.target.value);
+      el('customCode').addEventListener('input', (e) => state.customBotCode = e.target.value);
+      el('resetCustom').addEventListener('click', () => {
+        state.customBotCode = `// Example custom bot\nif (market.rsi < 30) {\n  return { action: 'BUY_ALL' };\n}\nif (market.rsi > 70) {\n  return { action: 'SELL_ALL' };\n}\nreturn { action: 'HOLD' };`;
+        el('customCode').value = state.customBotCode;
+      });
+      el('runCustom').addEventListener('click', () => {
+        state.customBotEnabled = true;
+        setTradeButtons();
+        state.customBotProfit = state.botStats.custom.profit;
+      });
+      el('customRegime').addEventListener('click', () => {
+        state.isFetchingRegime = true;
+        state.regime = { name: '✨ Synthetic Shock', drift: (Math.random() - 0.5) * 0.01, vol: 0.008 + Math.random() * 0.02 };
+        state.isFetchingRegime = false;
+        renderAll();
+      });
+      el('aiAdviceBtn').addEventListener('click', () => {
+        state.aiAdvice = 'AI is currently unavailable in pure HTML mode. Use your own math.';
+        renderAll();
+      });
+      el('analysisBtn').addEventListener('click', () => {
+        const closes = state.history.map(h => h.close);
+        const price = closes[closes.length - 1];
+        const rs = rsi(closes).toFixed(2);
+        state.analyst = `Price ${fmt.format(price)}. RSI ${rs}. Trend filter and risk compression remain the primary signals.`;
+        renderAll();
+      });
+      el('newsBtn').addEventListener('click', () => {
+        state.news = { text: 'Breaking fictional macro shock hits the market.', impact: 'bear' };
+        state.regime = { name: 'AI News Shock', drift: -0.005, vol: 0.02 };
+        renderAll();
+      });
+      el('loadPolygon').addEventListener('click', async () => {
+        const key = el('polygonKey').value.trim();
+        const ticker = el('tickerInput').value.trim().toUpperCase();
+        state.polygonKey = key;
+        state.ticker = ticker || 'AAPL';
+        state.polygonError = 'Live Polygon fetch not wired in static HTML build.';
+        renderAll();
+      });
+
+      el('customCode').value = state.customBotCode;
+      el('botLang').value = state.customBotLanguage;
+      setTradeButtons();
+      resizeCanvases();
+      renderAll();
+
+      let lastFrame = performance.now();
+      function loop(ts) {
+        const interval = 500 / state.speed;
+        if (state.isRunning && ts - lastFrame >= interval) {
+          lastFrame = ts;
+          priceStep();
+          computeBotSnapshots(state.history[state.history.length - 1].close);
+        }
+        requestAnimationFrame(loop);
+      }
+      requestAnimationFrame(loop);
+
+      window.addEventListener('resize', resizeCanvases);
+    })();
+  </script>
+</body>
+</html>
