@@ -2,6 +2,30 @@
 
 A quantitative trading simulator that I started building to learn financial engineering, algorithmic trading, and market microstructure through hands-on experimentation.
 
+## How QuantSim is different
+
+QuantSim is not meant to be a brokerage account or a live trading platform like Alpaca, Interactive Brokers, or QuantConnect. It is a learning and research project built to help me understand how strategies behave before any real money is involved.
+
+| Feature | QuantSim | Alpaca | Interactive Brokers | QuantConnect |
+|--------|----------|--------|---------------------|--------------|
+| Browser-based simulation | ✅ | ❌ | ❌ | ⚠️ |
+| Strategy visualization | ✅ | ⚠️ | ⚠️ | ✅ |
+| Built-in bot comparison | ✅ | ❌ | ❌ | ❌ |
+| Sharpe ratio tracking | ✅ | ⚠️ | ⚠️ | ✅ |
+| Educational focus | ✅ | ❌ | ❌ | ⚠️ |
+| Real-money trading | ❌ | ✅ | ✅ | ✅ |
+| Custom AI agents | ✅ | ❌ | ❌ | ❌ |
+| Custom bot sandbox | ✅ | ⚠️ | ⚠️ | ✅ |
+
+### Vision
+
+QuantSim aims to bridge the gap between:
+
+Student Learning → Quant Research → Strategy Development → Professional Trading Systems
+
+The goal is not to replace brokerages.
+The goal is to help users understand how quantitative strategies behave before risking real capital.
+
 ## Why I Built This
 
 I am a student interested in:
